@@ -1,13 +1,12 @@
-// SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.17;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
+// ERC20-based contract for weighted voting
 contract WeightedVoting is ERC20 {
-
-    uint256 public maxSupply = 1000000;
-
+    // Errors
     error TokensClaimed();
     error AllTokensClaimed();
     error NoTokensHeld();
@@ -15,119 +14,106 @@ contract WeightedVoting is ERC20 {
     error AlreadyVoted();
     error VotingClosed();
 
-    mapping(address => bool) public claimingList;
+    mapping(address => bool) public tokensClaimed;
 
     using EnumerableSet for EnumerableSet.AddressSet;
 
+    // Struct for issue details
     struct Issue {
         EnumerableSet.AddressSet voters;
         string issueDesc;
+        uint256 quorum;
+        uint256 totalVotes;
         uint256 votesFor;
         uint256 votesAgainst;
         uint256 votesAbstain;
-        uint256 totalVotes;
-        uint256 quorum;
-        bool isPassed;
-        bool isClosed;
+        bool passed;
+        bool closed;
     }
 
+    // Struct for serialized issue details
     struct IssueReturn {
+        address[] voters;
         string issueDesc;
+        uint256 quorum;
+        uint256 totalVotes;
         uint256 votesFor;
         uint256 votesAgainst;
         uint256 votesAbstain;
-        uint256 totalVotes;
-        uint256 quorum;
-        bool isPassed;
-        bool isClosed;
+        bool passed;
+        bool closed;
     }
 
-    Issue[] issues;
-
+    // Enum for vote types
     enum Vote {
         AGAINST,
         FOR,
         ABSTAIN
     }
 
-    constructor() ERC20("MyToken", "MTK") {
+    Issue[] internal issues;
+
+    uint256 public maxSupply = 1_000_000;
+    uint256 public claimAmount = 100;
+
+    constructor(string memory _name, string memory _symbol) ERC20(_name, _symbol) {
+        issues.push(); // Initialize with an empty issue
     }
 
     function claim() public {
-        if (totalSupply() + 100 > maxSupply){
-            revert AllTokensClaimed();
-        }
-        else if (claimingList[msg.sender]){
-            revert TokensClaimed();
-        }
-        _mint(msg.sender, 100);
-        claimingList[msg.sender] = true;
+        if (totalSupply() + claimAmount > maxSupply) revert AllTokensClaimed();
+        if (tokensClaimed[msg.sender]) revert TokensClaimed();
+
+        _mint(msg.sender, claimAmount);
+        tokensClaimed[msg.sender] = true;
     }
 
-    function createIssue(string memory _desc, uint256 _quorum) external returns (uint256 index) {
-        if (balanceOf(msg.sender) > 0){
+    function createIssue(string calldata _issueDesc, uint256 _quorum) external returns (uint256) {
+        if (balanceOf(msg.sender) == 0) revert NoTokensHeld();
+        if (_quorum > totalSupply()) revert QuorumTooHigh();
 
-            if (_quorum <= totalSupply()) {
-                Issue storage _issue = issues.push();
-                _issue.issueDesc = _desc;
-                _issue.quorum = _quorum;
-
-                index = issues.length -1;
-            } else {
-                revert QuorumTooHigh(_quorum);
-            }
-        } else {
-            revert NoTokensHeld();
-        }
+        Issue storage _issue = issues.push();
+        _issue.issueDesc = _issueDesc;
+        _issue.quorum = _quorum;
+        return issues.length - 1;
     }
 
-    function getIssue(uint256 _id) external view returns (IssueReturn memory) {
-        if (_id >= issues.length){
-            revert("Issue does not exist");
-        }
-
-        Issue storage _issue = issues[_id];
-
+    function getIssue(uint256 _issueId) external view returns (IssueReturn memory) {
+        Issue storage _issue = issues[_issueId];
         return IssueReturn({
+            voters: _issue.voters.values(),
             issueDesc: _issue.issueDesc,
+            quorum: _issue.quorum,
+            totalVotes: _issue.totalVotes,
             votesFor: _issue.votesFor,
             votesAgainst: _issue.votesAgainst,
             votesAbstain: _issue.votesAbstain,
-            totalVotes: _issue.totalVotes,
-            quorum: _issue.quorum,
-            isPassed: _issue.isPassed,
-            isClosed: _issue.isClosed
+            passed: _issue.passed,
+            closed: _issue.closed
         });
     }
 
     function vote(uint256 _issueId, Vote _vote) public {
-
         Issue storage _issue = issues[_issueId];
 
-        if(_issue.isClosed){
-            revert VotingClosed();
-        } else if(_issue.voters.contains(msg.sender)){
-            revert AlreadyVoted();
-        }
+        if (_issue.closed) revert VotingClosed();
+        if (_issue.voters.contains(msg.sender)) revert AlreadyVoted();
 
-        uint256 allTokens = balanceOf(msg.sender);
+        uint256 nTokens = balanceOf(msg.sender);
+        if (nTokens == 0) revert NoTokensHeld();
 
-        _issue.totalVotes += allTokens;
-
-        if(_vote == Vote.FOR){
-            _issue.votesFor += allTokens;
-        }else if(_vote == Vote.AGAINST){
-            _issue.votesAgainst += allTokens;
-        }else if(_vote == Vote.ABSTAIN){
-            _issue.votesAbstain += allTokens;
-        }
-
-        if(_issue.totalVotes >= _issue.quorum){
-            _issue.isClosed = true;
-        }if(_issue.votesFor > _issue.votesAgainst){
-            _issue.isPassed = true;
-        }
+        if (_vote == Vote.AGAINST) _issue.votesAgainst += nTokens;
+        else if (_vote == Vote.FOR) _issue.votesFor += nTokens;
+        else _issue.votesAbstain += nTokens;
 
         _issue.voters.add(msg.sender);
+        _issue.totalVotes += nTokens;
+
+        if (_issue.totalVotes >= _issue.quorum) {
+            _issue.closed = true;
+            if (_issue.votesFor > _issue.votesAgainst) {
+                _issue.passed = true;
+            }
+        }
     }
 }
